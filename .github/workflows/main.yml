@@ -1,49 +1,33 @@
-name: Build WinPE ISO
-
-on:
-  workflow_dispatch: # Allows manual triggering from the Actions tab
-  push:
-    branches: [ "main" ]
-
-jobs:
-  build:
-    name: Build WinPE
-    runs-on: windows-latest
-    
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Install Windows ADK and WinPE Add-on
+- name: Install Windows ADK and WinPE Add-on
         shell: powershell
         run: |
-          # Install ADK and the WinPE Add-on using Chocolatey
-          # This handles the heavy lifting of downloading the Microsoft installers
-          choco install windows-adk -y --no-progress
-          choco install windows-adk-winpe -y --no-progress
+          # Function to retry choco installs on network failure
+          function Install-WithRetry {
+              param ([string]$PackageName)
+              $MaxRetries = 3
+              $RetryCount = 0
+              $Success = $false
 
-      - name: Create WinPE Files and Build ISO
-        shell: cmd
-        run: |
-          :: 1. Locate the Deployment Tools environment script
-          :: The path typically defaults to this location for the chocolatey install
-          call "C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit\Deployment Tools\DandISetEnv.bat"
-          
-          :: 2. Create the working directory for 64-bit WinPE
-          :: This creates a directory at C:\winpe_amd64
-          call copype amd64 C:\winpe_amd64
-          
-          :: (Optional) Mount the image if you needed to inject drivers/packages
-          :: dism /Mount-Image /ImageFile:"C:\winpe_amd64\media\sources\boot.wim" /index:1 /MountDir:"C:\winpe_amd64\mount"
-          :: dism /Unmount-Image /MountDir:"C:\winpe_amd64\mount" /commit
-          
-          :: 3. Generate the ISO file
-          call MakeWinPEMedia /ISO C:\winpe_amd64 C:\winpe_amd64\WinPE_amd64.iso
+              do {
+                  Write-Host "Attempting to install $PackageName (Attempt $($RetryCount + 1))"
+                  
+                  # --execution-timeout=2700 sets the timeout to 45 minutes (default is often too short for ADK)
+                  choco install $PackageName -y --no-progress --execution-timeout=2700
+                  
+                  if ($LASTEXITCODE -eq 0) {
+                      $Success = $true
+                  } else {
+                      Write-Warning "Install failed. Waiting 15s before retrying..."
+                      Start-Sleep -Seconds 15
+                      $RetryCount++
+                  }
+              } while ($Success -eq $false -and $RetryCount -lt $MaxRetries)
 
-      - name: Upload WinPE ISO
-        uses: actions/upload-artifact@v4
-        with:
-          name: WinPE-ISO
-          path: C:\winpe_amd64\WinPE_amd64.iso
-          if-no-files-found: error
-          retention-days: 5 # Keeps storage temporary
+              if (-not $Success) {
+                  Write-Error "Failed to install $PackageName after $MaxRetries attempts."
+                  exit 1
+              }
+          }
+
+          Install-WithRetry "windows-adk"
+          Install-WithRetry "windows-adk-winpe"
