@@ -1,7 +1,23 @@
-- name: Install Windows ADK and WinPE Add-on
+name: Build WinPE ISO
+
+on:
+  workflow_dispatch: # Allows manual triggering from the Actions tab
+  push:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    name: Build WinPE
+    runs-on: windows-latest
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Windows ADK and WinPE Add-on
         shell: powershell
         run: |
-          # Function to retry choco installs on network failure
+          # Function to retry choco installs on network failure or timeouts
           function Install-WithRetry {
               param ([string]$PackageName)
               $MaxRetries = 3
@@ -11,7 +27,7 @@
               do {
                   Write-Host "Attempting to install $PackageName (Attempt $($RetryCount + 1))"
                   
-                  # --execution-timeout=2700 sets the timeout to 45 minutes (default is often too short for ADK)
+                  # --execution-timeout=2700 sets the limit to 45 minutes (default is too short for ADK)
                   choco install $PackageName -y --no-progress --execution-timeout=2700
                   
                   if ($LASTEXITCODE -eq 0) {
@@ -29,5 +45,29 @@
               }
           }
 
+          # Install the ADK Core
           Install-WithRetry "windows-adk"
+          
+          # Install the WinPE Add-on
           Install-WithRetry "windows-adk-winpe"
+
+      - name: Create WinPE Files and Build ISO
+        shell: cmd
+        run: |
+          :: 1. Locate the Deployment Tools environment script
+          :: Note: Even for Win 11 ADK, the path often remains "Windows Kits\10"
+          call "C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit\Deployment Tools\DandISetEnv.bat"
+          
+          :: 2. Create the working directory for 64-bit WinPE
+          call copype amd64 C:\winpe_amd64
+          
+          :: 3. Generate the ISO file
+          call MakeWinPEMedia /ISO C:\winpe_amd64 C:\winpe_amd64\WinPE_amd64.iso
+
+      - name: Upload WinPE ISO
+        uses: actions/upload-artifact@v4
+        with:
+          name: WinPE-ISO
+          path: C:\winpe_amd64\WinPE_amd64.iso
+          if-no-files-found: error
+          retention-days: 5
