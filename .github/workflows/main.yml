@@ -1,0 +1,49 @@
+name: Build WinPE ISO
+
+on:
+  workflow_dispatch: # Allows manual triggering
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Windows ADK
+        shell: powershell
+        run: |
+          # Download and install ADK (Deployment Tools)
+          $adkUrl = "https://go.microsoft.com/fwlink/?linkid=2271747"
+          $adkPath = "$env:TEMP\adksetup.exe"
+          Invoke-WebRequest -Uri $adkUrl -OutFile $adkPath
+          Start-Process -FilePath $adkPath -ArgumentList "/quiet", "/installpath", "C:\ADK", "/features", "OptionId.DeploymentTools" -Wait
+
+          # Download and install WinPE Add-on
+          $peUrl = "https://go.microsoft.com/fwlink/?linkid=2271337"
+          $pePath = "$env:TEMP\adkwinpesetup.exe"
+          Invoke-WebRequest -Uri $peUrl -OutFile $pePath
+          Start-Process -FilePath $pePath -ArgumentList "/quiet", "/installpath", "C:\ADK", "/features", "OptionId.WindowsPreinstallationEnvironment" -Wait
+
+      - name: Create WinPE ISO
+        shell: pwsh
+        run: |
+          # Set paths for ADK tools
+          $DandISetEnv = "C:\ADK\Deployment Tools\DandISetEnv.bat"
+          
+          # Initialize the WinPE working directory
+          # We use cmd /c to run the batch script provided by ADK to set environment variables
+          cmd /c "`"$DandISetEnv`" && copype amd64 C:\WinPE_amd64"
+          
+          # Create the ISO file
+          cmd /c "`"$DandISetEnv`" && MakeWinPEMedia /ISO C:\WinPE_amd64 C:\WinPE_amd64\WinPE.iso"
+
+      - name: Upload WinPE ISO
+        uses: actions/upload-artifact@v4
+        with:
+          name: WinPE-ISO
+          path: C:\WinPE_amd64\WinPE.iso
+          retention-days: 5
